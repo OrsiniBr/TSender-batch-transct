@@ -2,19 +2,46 @@
 import { useMemo, useState } from "react";
 import InputField from "@/components/ui/InputField";
 import { chainsToTSender, tsenderAbi, erc20Abi } from "@/constant";
-import { useChainId, useConfig, useAccount } from "wagmi";
-import { readContract } from "@wagmi/core";
+import {
+  useChainId,
+  useConfig,
+  useAccount,
+  useWriteContract,
+  useReadContracts,
+} from "wagmi";
+import { readContract, waitForTransactionReceipt } from "@wagmi/core";
 import { calculateTotal } from "@/utils";
+import { CgSpinner } from "react-icons/cg";
 
 export default function AirdropForm() {
   const [tokenAddress, setTokenAddress] = useState("");
-  const [recipient, setRecipient] = useState("");
+  const [recipients, setrecipients] = useState("");
   const [amounts, setAmounts] = useState("");
   const chainId = useChainId();
   const config = useConfig();
   const account = useAccount();
   const total: number = useMemo(() => calculateTotal(amounts), [amounts]);
-  useMemo(() => console.log(calculateTotal(amounts)), [amounts]);
+  const { data: hash, isPending, writeContractAsync } = useWriteContract({})
+  const { data: tokenData } = useReadContracts({
+    contracts: [
+      {
+        abi: erc20Abi,
+        address: tokenAddress as `0x${string}`,
+        functionName: "decimals",
+      },
+      {
+        abi: erc20Abi,
+        address: tokenAddress as `0x${string}`,
+        functionName: "name",
+      },
+      {
+        abi: erc20Abi,
+        address: tokenAddress as `0x${string}`,
+        functionName: "balanceOf",
+        args: [account.address],
+      },
+    ],
+  });
 
     
   async function getApprovedAmount(
@@ -31,6 +58,7 @@ export default function AirdropForm() {
       functionName: "allowance",
       args: [account.address, tSenderAddress as `0x${string}`],
     });
+    
     return response as number;
   }
 
@@ -42,7 +70,61 @@ export default function AirdropForm() {
     const tSenderAddress = chainsToTSender[chainId]["tsender"];
     const approvedAmount = await getApprovedAmount(tSenderAddress);
     console.log(approvedAmount);
-    // if (result)
+    if (approvedAmount < total) {
+      let isPending = true;
+      const approvalHash = await writeContractAsync({
+        abi: erc20Abi,
+        address: tokenAddress as `0x${string}`,
+        functionName: "approve",
+        args: [tSenderAddress as `0x${string}`, BigInt(total)],
+      });
+      const apporvalReciept = await waitForTransactionReceipt(config, {
+        hash: approvalHash,
+      });
+      console.log("Approval confirmed:", apporvalReciept);
+      await writeContractAsync({
+        abi: tsenderAbi,
+        address: tSenderAddress as `0x${string}`,
+        functionName: "airdropERC20",
+        args: [
+          tokenAddress,
+          // Comma or new line separated
+          recipients
+            .split(/[,\n]+/)
+            .map((addr) => addr.trim())
+            .filter((addr) => addr !== ""),
+          amounts
+            .split(/[,\n]+/)
+            .map((amt) => amt.trim())
+            .filter((amt) => amt !== ""),
+          BigInt(total),
+        ],
+      });
+      isPending = false;
+    } else {
+      let isPending = true;
+      await writeContractAsync({
+        abi: tsenderAbi,
+        address: tSenderAddress as `0x${string}`,
+        functionName: "airdropERC20",
+        args: [
+          tokenAddress,
+          // Comma or new line separated
+          recipients
+            .split(/[,\n]+/)
+            .map((addr) => addr.trim())
+            .filter((addr) => addr !== ""),
+          amounts
+            .split(/[,\n]+/)
+            .map((amt) => amt.trim())
+            .filter((amt) => amt !== ""),
+          BigInt(total),
+        ],
+      });
+      isPending = false;
+
+    }
+    //0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
   }
 
   return (
@@ -55,10 +137,10 @@ export default function AirdropForm() {
       />
 
       <InputField
-        label="Recipient"
+        label="recipients"
         placeholder="0x..."
-        value={recipient}
-        onChange={(e) => setRecipient(e.target.value)}
+        value={recipients}
+        onChange={(e) => setrecipients(e.target.value)}
         large={true}
       />
 
@@ -70,11 +152,13 @@ export default function AirdropForm() {
         onChange={(e) => setAmounts(e.target.value)}
         large={true}
       />
+
       <button
         className={`cursor-pointer flex items-center justify-center w-full py-3 rounded-[9px] text-white transition-colors font-semibold relative border `}
         onClick={handleSubmit}
       >
-        send tokens
+          Send Tokens
+        
       </button>
     </div>
   );
